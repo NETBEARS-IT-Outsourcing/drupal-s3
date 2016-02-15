@@ -1,0 +1,95 @@
+packages:
+    yum:
+        unzip: []
+        git: []
+        gcc: []
+        libstdc++-devel: []
+        gcc-c++: []
+        fuse: []
+        fuse-devel: []
+        libcurl-devel: []
+        libxml2-devel: []
+        openssl-devel: []
+        mailcap: []
+        automake: []
+
+files:
+    "/tmp/master.zip":
+        source: https://github.com/s3fs-fuse/s3fs-fuse/archive/master.zip
+
+    "/etc/fuse.conf" :
+        mode: "000644"
+        owner: root
+        group: root
+        content: |
+            # mount_max = 1000
+            user_allow_other
+    "/etc/passwd-s3fs" :
+        mode: "000600"
+        owner: root
+        group: root
+        content: |
+            # set AWS cred as global
+            AWS_KEY:AWS_SECRET
+
+    "/opt/elasticbeanstalk/hooks/appdeploy/pre/11_unmount_s3fs.sh":
+        mode: "000755"
+        owner: root
+        group: root
+        content: |
+            #!/usr/bin/env bash
+
+            if mountpoint -q /var/www/html/sites/default/files/s3; then
+                fusermount -u /var/www/html/sites/default/files/s3
+            fi
+
+    "/opt/elasticbeanstalk/hooks/appdeploy/enact/02_mount_s3fs.sh":
+        mode: "000755"
+        owner: root
+        group: root
+        content: |
+            #!/usr/bin/env bash
+
+            . /opt/elasticbeanstalk/support/envvars
+
+            # Make sure it's mounted as the webapp user
+            if [[ ! -d /var/www/html/sites ]]; then
+                sudo mkdir /var/www/html/sites && sudo chown webapp:webapp -R /var/www/html/sites && echo 'created ./sites'
+            else
+                echo './sites already exists'
+            fi
+
+            if [[ ! -d /var/www/html/sites/default ]]; then
+                sudo mkdir /var/www/html/sites/default && sudo chown webapp:webapp -R /var/www/html/sites/default && echo 'created ./sites/default'
+            else
+                echo './sites/default already exists'
+            fi
+
+            if [[ ! -d /var/www/html/sites/default/files ]]; then
+                 sudo mkdir /var/www/html/sites/default/files && sudo chown webapp:webapp -R /var/www/html/sites/default/files && echo 'created ./sites/default/files'
+            else
+                echo './sites/default/files already exists'
+            fi
+
+            sudo chmod 755 /var/sites/default/
+
+            if [[ ! -e /var/www/html/sites/default/files/s3 ]]; then
+                sudo mkdir /var/www/html/sites/default/files/s3 && sudo chown webapp:webapp -R /var/www/html/sites/default/files/s3 && echo 'created ./sites/default/files/s3'
+            elif [[ ! -d /var/www/html/sites/default/files/s3 ]]; then
+                echo './files/s3 already exists but is not a directory' 1>&2
+            fi
+            id=`id -u webapp`
+            s3fs pubmountbucketmcl:/prod /var/www/html/sites/default/files/s3 -o nonempty -o uid=$id -o gid=$id -o use_cache=/tmp -o allow_other -o passwd_file=/etc/passwd-s3fs
+
+commands:
+    001_unzip_dir:
+        cwd: /tmp
+        command: "sudo unzip /tmp/master.zip -d /opt && rm -rf /tmp/master.zip"
+    01_patch_s3fs:
+        cwd: /opt/s3fs-fuse-master/src
+        command: "sed -i 's/AWS_KEY/g;s/AWS_SECRET/g' s3fs.cpp"
+
+    02_install_s3fs:
+        cwd: /opt/s3fs-fuse-master/
+        test: "[ ! -x /usr/bin/s3fs ]"
+        command: "./autogen.sh && ./configure && export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig && ./configure --prefix=/usr && make && sudo make install"
